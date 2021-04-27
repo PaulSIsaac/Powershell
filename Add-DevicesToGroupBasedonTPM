@@ -1,0 +1,96 @@
+########################################################################################################################
+#                                                                                                                      #
+#                .SYNOPIS                                                                                              #
+#                   Exclude Devices without TPM from Policy enforcing BitLocker.                                       #
+#                                                                                                                      #
+#                .DESCRIPTION                                                                                          #
+#                   Uses Graph to query MEM and determine if a device has a TPM Chip enabled.                          #
+#                   If Not it adds the device to a Security Group Called BitLocker Exclusions.                         #
+#                   This group can then be excluded from BitLocker Compliance Policies.                                #
+#                                                                                                                      #
+#                .NOTES                                                                                                #
+#                   File Name : Add-DevicesToGroupBasedonTPM.ps1                                                       #
+#                   Author : Paul Isaac                                                                                #
+#                   Prerequisites :  AZUREAD Module                                                                    #
+#                                    Application created and registered in AAD                                         #
+#                                    Secret created for Application                                                    #
+#                                    Read Rights assigned to Application for Graph (Devices and Device Management)     #
+#                                    Groups Administrator and Intune Administrator in Azure AD                         #
+#                                                                                                                      #
+#                   The Graph Section of this script was created with help from                                        #
+#                                           …a guy playing around with Powershell and Azure AD                         #
+#                                                  https://scripting.up-in-the.cloud/about                             #
+#                                                                                                                      #
+#                                                                                                                      #
+########################################################################################################################
+
+$ApplicationID = "<Enter AppID Here>"
+$TenantDomainName = "<Enter Tenant Domain Name Here eg: www.contoso.com>"
+$AccessSecret = "<Enter AppID Secret Value Here" #It is recommended that you not store the secret key in this script. Consider using a Parameter and entering it everytime for security purposes.
+
+
+$Body = @{    
+Grant_Type    = "client_credentials"
+Scope         = "https://graph.microsoft.com/.default"
+client_Id     = $ApplicationID
+Client_Secret = $AccessSecret
+} 
+
+$ConnectGraph = Invoke-RestMethod -Uri "https://login.microsoftonline.com/$TenantDomainName/oauth2/v2.0/token" `
+-Method POST -Body $Body
+
+$token = $ConnectGraph.access_token
+
+
+$GrapDeviceUrl = 'https://graph.microsoft.com/beta/deviceManagement/managedDeviceEncryptionStates/'
+$AADDeviceInfo = Invoke-RestMethod -Headers @{Authorization = "Bearer $($token)"} -Uri $GrapDeviceUrl -Method Get
+
+
+$AADDevices = $Null
+
+
+$NextLink = $AADDeviceInfo.'@odata.nextLink'
+$AADDevices += $AADDeviceInfo.Value
+
+
+Connect-AzureAD -AccountID <Enter User UPN Here> #This is required if user running script has MFA enabled. It can be automated if not.
+ForEach($AADDevice in $AADDevices)
+{
+    "**********************"
+    If($AADDevice.tpmSpecificationVersion -eq $Null)
+    {
+        $AADDeviceName = $AADDevice.deviceName
+        "Found $AADDeviceName"
+        $ComputerObjects = Get-AzureADDevice -SearchString $AADDeviceName
+        ForEach($ComputerObject in $ComputerObjects)
+        {
+            $ComputerObjectName = $ComputerObject.DisplayName
+            [string]$ComputerObjectID = $ComputerObject.ObjectID
+            $ComputerObjectID
+            $GroupObject = Get-AzureADGroup -SearchString  "Bitlocker Exceptions"
+            $GroupObjectName = $GroupObject.DisplayName
+            [string]$GroupObjectID = $GroupObject.ObjectId
+            "Attempting to add $ComputerObjectName to $GroupObjectName"
+            Add-AzureADGroupMember -ObjectId $GroupObjectID -RefObjectID $ComputerObjectID    
+        }
+    }
+    Else
+    {
+        $AADDeviceName = $AADDevice.deviceName
+        "Found $AADDeviceName"
+        $ComputerObjects = Get-AzureADDevice -SearchString $AADDeviceName
+        ForEach($ComputerObject in $ComputerObjects)
+        {
+            $ComputerObjectName = $ComputerObject.DisplayName
+            [string]$ComputerObjectID = $ComputerObject.ObjectID
+            $ComputerObjectID
+            $GroupObject = Get-AzureADGroup -SearchString  "Bitlocker Enabled"
+            $GroupObjectName = $GroupObject.DisplayName
+            [string]$GroupObjectID = $GroupObject.ObjectId
+            "Attempting to add $ComputerObjectName to $GroupObjectName"
+            Add-AzureADGroupMember -ObjectId $GroupObjectID -RefObjectID $ComputerObjectID    
+        }
+    
+    }
+    
+}
